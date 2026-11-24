@@ -804,11 +804,32 @@ async function findSection(ctx) {
   return secs.items.find((s) => SECTION_NAME.test(s.name)) || (act.isNullObject ? null : act);
 }
 
-async function readActiveIn(ctx) {
-  const page = ctx.application.getActivePageOrNull();
-  page.load("id,title");
+// OneNote on the web sometimes throws on getActivePageOrNull (mid-navigation). Treat that as "no page" after one retry.
+async function activePage(ctx) {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const page = ctx.application.getActivePageOrNull();
+      page.load("id,title");
+      await ctx.sync();
+      return page.isNullObject ? null : page;
+    } catch (e) { logErr("getActivePageOrNull", e); await pause(600); }
+  }
+  return null;
+}
+async function pageById(ctx, pageId) {
+  const sec = await findSection(ctx);
+  if (!sec) throw new Error("Couldn't find the Daily Charters section");
+  sec.pages.load("id,title");
   await ctx.sync();
-  if (page.isNullObject) return { page: null };
+  return sec.pages.items.find((x) => x.id === pageId) || null;
+}
+async function readActiveIn(ctx) {
+  const page = await activePage(ctx);
+  if (!page) return { page: null };
+  return readPageIn(ctx, page);
+}
+// Reads the charter table on any page, open or not.
+async function readPageIn(ctx, page) {
   const info = { id: page.id, title: page.title };
   const contents = page.contents;
   contents.load("type");
@@ -850,16 +871,24 @@ const OneNoteStore = {
       const sec = await findSection(ctx);
       if (!sec) return { sectionName: "", days: [], activeId: null };
       sec.pages.load("id,title");
-      const act = ctx.application.getActivePageOrNull();
-      act.load("id");
       await ctx.sync();
       const days = sec.pages.items.map((p) => { const t = parseTitle(p.title); return t ? Object.assign({ id: p.id, title: clean(p.title) }, t) : null; }).filter(Boolean);
-      return { sectionName: sec.name, days, activeId: act.isNullObject ? null : act.id };
+      const act = await activePage(ctx);
+      return { sectionName: sec.name, days, activeId: act ? act.id : null };
     });
   },
   readActive() {
     return OneNote.run(async (ctx) => {
       const r = await readActiveIn(ctx);
+      return { page: r.page, grid: r.grid || null, shading: r.shading || null };
+    });
+  },
+  // Reads a day page without opening it.
+  readPage(pageId) {
+    return OneNote.run(async (ctx) => {
+      const page = await pageById(ctx, pageId);
+      if (!page) throw new Error("That page isn't in Daily Charters anymore");
+      const r = await readPageIn(ctx, page);
       return { page: r.page, grid: r.grid || null, shading: r.shading || null };
     });
   },
@@ -875,19 +904,26 @@ const OneNoteStore = {
       await ctx.sync();
     });
     for (let i = 0; i < 25; i++) {
-      const id = await OneNote.run(async (ctx) => { const p = ctx.application.getActivePageOrNull(); p.load("id"); await ctx.sync(); return p.isNullObject ? null : p.id; });
+      const id = await OneNote.run(async (ctx) => { const p = await activePage(ctx); return p ? p.id : null; });
       if (id === pageId) { await pause(300); return; }
-      await pause(200);
+      await pause(300);
     }
     throw new Error("OneNote didn't open the page in time");
   },
   // Adds rows to the open page. Existing rows are never edited.
   // Adds rows to the open page, one at a time. Existing rows are never edited.
   // OneNote on the web can reject a row inserted with values; then it inserts a blank row and fills it cell by cell.
-  addRows(pageId, rowsVals, driverCol) {
+  addRows(pageId, rowsVals, driverCol, viaActive) {
     return OneNote.run(async (ctx) => {
-      const r = await readActiveIn(ctx);
-      if (!r.page || r.page.id !== pageId) throw new Error("The day page changed before the rows went in");
+      let r;
+      if (viaActive) {
+        r = await readActiveIn(ctx);
+        if (!r.page || r.page.id !== pageId) throw new Error("The day page changed before the rows went in");
+      } else {
+        const page = await pageById(ctx, pageId);
+        if (!page) throw new Error("That page isn't in Daily Charters anymore");
+        r = await readPageIn(ctx, page);
+      }
       if (!r.table) throw new Error("No table on this day page");
       const table = r.table;
       const width = r.grid[0] ? r.grid[0].length : table.columnCount;
@@ -991,11 +1027,11 @@ function DemoStore() {
     ].join("\n"),
     async listDays() { await pause(40); return { sectionName: "Daily Charters", days: pages.map((p) => Object.assign({ id: p.id, title: p.title }, parseTitle(p.title, t))), activeId: active }; },
     async readActive() { await pause(40); const p = byId(active); return { page: { id: p.id, title: p.title }, grid: p.grid.map((r) => r.slice()), shading: p.shade.map((r) => r.slice()) }; },
+    async readPage(id) { await pause(40); const p = byId(id); if (!p) throw new Error("That page isn't in Daily Charters anymore"); return { page: { id: p.id, title: p.title }, grid: p.grid.map((r) => r.slice()), shading: p.shade.map((r) => r.slice()) }; },
     async goTo(id) { await pause(120); if (!byId(id)) throw new Error("That page isn't in Daily Charters anymore"); active = id; },
     async addRows(id, rowsVals, driverCol) {
       await pause(100);
       const p = byId(id);
-      if (active !== id) throw new Error("The day page changed before the rows went in");
       const at = insertAt(p.grid);
       rowsVals.forEach((v, k) => { p.grid.splice(at + k, 0, v.slice(0, H.length)); p.shade.splice(at + k, 0, H.map((_, i) => (i === driverCol ? unconfirmedColour(p.shade, driverCol) : ""))); });
       return { first: at, count: rowsVals.length };
@@ -1056,6 +1092,9 @@ async function ingestActive() {
   state.lastRead = Date.now();
   if (!r.page) return r;
   state.activeId = r.page.id;
+  return ingest(r);
+}
+function ingest(r) {
   const day = dayById(r.page.id);
   if (!day || !r.grid || !r.grid.length) return r;
   const layout = layoutFor(r.grid);
@@ -1071,8 +1110,21 @@ function layoutFor(grid) {
   return g;
 }
 
+// Reads a day page in place. Only if OneNote refuses does it fall back to opening the page.
 async function readDay(day, label) {
   if (label) setStatus(label);
+  if (state.direct !== false && state.store.readPage) {
+    try {
+      const r = await state.store.readPage(day.id);
+      state.direct = true;
+      state.lastRead = Date.now();
+      return ingest(r);
+    } catch (e) {
+      logErr("read page in place", e);
+      if (state.direct === true) throw e;
+      state.direct = false;
+    }
+  }
   if (state.activeId !== day.id) await state.store.goTo(day.id);
   state.activeId = day.id;
   return ingestActive();
@@ -1093,7 +1145,10 @@ async function refresh() {
       setStatus("");
       return;
     }
-    const r = dayById(state.activeId) ? await ingestActive() : null;
+    let r = null;
+    try { r = dayById(state.activeId) ? await ingestActive() : null; } catch (e) { logErr("read open page", e); }
+    // Not on a date page? Learn the columns from the next charter day without opening it.
+    if (!r && (!DB.layout || !DB.layout.confirmed)) { try { const d = nextDay(); if (d) r = await readDay(d); } catch (e) { /* show setup */ } }
     recompute();
     if (!DB.layout || !DB.layout.confirmed) {
       if (r && r.grid) { showCols(r.grid, r.layout); return; }
@@ -1431,15 +1486,15 @@ function resetForm(focus) {
   resetConfirm();
   if (focus !== false) { $("filledNote").hidden = true; $(F.school).focus(); }
 }
-function showToast(text) {
+function showToast(text, day) {
   const t = $("toast");
   t.textContent = "";
-  t.append(alertEl("green", "Added", text));
+  t.append(alertEl("green", "Added", text, false, day ? goButtons([{ pageId: day.id, title: day.title }]) : null));
   clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => { t.textContent = ""; }, 10000);
+  state.toastTimer = setTimeout(() => { t.textContent = ""; }, 15000);
 }
 
-// Pages within NEAR_DAYS of the date, plus any page memory says holds this ID. Target page read last so it ends up open.
+// Pages within NEAR_DAYS of the date, plus any page memory says holds this ID, then the target page.
 async function freshen(e, target) {
   const near = state.days.filter((d) => Math.abs(dayDiff(isoToDate(d.iso), e.date)) <= NEAR_DAYS && d.id !== target.id);
   const idPages = e.id ? state.rows.filter((r) => r.id === e.id).map((r) => dayById(r.pageId)).filter(Boolean) : [];
@@ -1483,11 +1538,11 @@ async function onAdd() {
     $("addBtn").textContent = "Adding…";
     const pageRows = state.rows.filter((r) => r.pageId === target.id);
     const values = rowValues(e, DB.layout, writeStyle(pageRows.length ? pageRows : state.rows));
-    const res = await state.store.addRows(target.id, Array.from({ length: e.buses }, () => values), DB.layout.roles.indexOf("driver"));
-    await ingestActive();
+    const res = await state.store.addRows(target.id, Array.from({ length: e.buses }, () => values), DB.layout.roles.indexOf("driver"), state.direct === false);
+    try { await readDay(target); } catch (x) { /* rows are in; memory catches up next read */ }
     recompute();
     const notes = res.notes && res.notes.length ? ` Please ${listJoin(res.notes)}.` : " Driver cell marked yellow, not confirmed.";
-    showToast(`${e.school}${e.id ? ` (${e.id})` : ""} on ${target.title}, ${res.count > 1 ? `rows ${res.first} to ${res.first + res.count - 1}` : `row ${res.first}`}.${notes}`);
+    showToast(`${e.school}${e.id ? ` (${e.id})` : ""} on ${target.title}, ${res.count > 1 ? `rows ${res.first} to ${res.first + res.count - 1}` : `row ${res.first}`}.${notes}`, target);
     state.confirmSig = null;
     $("addBtn").dataset.mode = "normal";
     state.busy = false;
@@ -1496,7 +1551,7 @@ async function onAdd() {
   } catch (err) {
     $("alerts").textContent = "";
     logErr("add", err);
-    try { await ingestActive(); recompute(); } catch (x) { /* keep going */ }
+    try { await readDay(target); recompute(); } catch (x) { /* keep going */ }
     $("alerts").append(alertEl("red", "Couldn't add the trip", `${errText(err)} Look at the page before trying again, so the trip doesn't go in twice. If it keeps happening, take a screenshot of this message.`, true));
     statusLine();
   } finally {
