@@ -316,7 +316,17 @@ const clean = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
 const plural = (n, w) => `${n} ${n === 1 ? w : /(s|sh|ch|x)$/.test(w) ? w + "es" : w + "s"}`;
 function listJoin(a) { return a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`; }
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-function errText(e) { const m = e && (e.message || e.code); return m ? String(m).replace(/\.?$/, ".") : "Something went wrong."; }
+function errText(e) {
+  if (!e) return "Something went wrong.";
+  const d = e.debugInfo || {};
+  let m = String(e.message || e.code || "Something went wrong").replace(/\s*Check the OfficeExtension\.Error\.debugInfo for more information\.?/i, "").trim();
+  if (!m) m = "Something went wrong";
+  const where = [e.step, d.errorLocation, e.code && !m.includes(e.code) ? e.code : ""].filter(Boolean).join(", ");
+  return `${m.replace(/\.?$/, ".")}${where ? ` (${where})` : ""}`;
+}
+function logErr(step, e) {
+  try { console.error("[CharterLog]", step, e && e.code, e && e.message, JSON.stringify(e && e.debugInfo)); } catch (x) { /* ignore */ }
+}
 
 // ---------- Dates and times ----------
 function mkDate(y, m, d) { const dt = new Date(y, m, d); return dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d ? dt : null; }
@@ -872,31 +882,64 @@ const OneNoteStore = {
     throw new Error("OneNote didn't open the page in time");
   },
   // Adds rows to the open page. Existing rows are never edited.
+  // Adds rows to the open page, one at a time. Existing rows are never edited.
+  // OneNote on the web can reject a row inserted with values; then it inserts a blank row and fills it cell by cell.
   addRows(pageId, rowsVals, driverCol) {
     return OneNote.run(async (ctx) => {
       const r = await readActiveIn(ctx);
       if (!r.page || r.page.id !== pageId) throw new Error("The day page changed before the rows went in");
       if (!r.table) throw new Error("No table on this day page");
-      const width = r.grid[0] ? r.grid[0].length : r.table.columnCount;
+      const table = r.table;
+      const width = r.grid[0] ? r.grid[0].length : table.columnCount;
       const at = insertAt(r.grid);
-      const made = rowsVals.map((vals, k) => {
-        const v = vals.slice(0, width);
-        while (v.length < width) v.push("");
-        return at + k < r.grid.length ? r.table.insertRow(at + k, v) : r.table.appendRow(v);
-      });
-      await ctx.sync();
-      // New rows can copy the colour of the row above (grey of a cancelled trip, red driver). Start them plain,
-      // then mark the driver cell yellow: driver not confirmed yet.
       const yellow = unconfirmedColour(r.shading, driverCol);
-      made.forEach((row) => row.cells.load("cellIndex,shadingColor"));
-      await ctx.sync();
-      made.forEach((row) => {
-        if (row.cells.items.some((c) => c.cellIndex !== driverCol && isShaded(c.shadingColor))) row.setShadingColor("#FFFFFF");
-        const cell = row.cells.items.find((c) => c.cellIndex === driverCol);
-        if (cell) cell.shadingColor = yellow;
-      });
-      await ctx.sync();
-      return { first: at, count: made.length };
+      const notes = [];
+      let count = r.grid.length, done = 0;
+      const rowCountNow = async () => { table.load("rowCount"); await ctx.sync(); return table.rowCount; };
+      const fail = (step, e) => { logErr(step, e); const err = new Error(done ? `${done} of ${rowsVals.length} rows went in, then OneNote stopped` : "OneNote didn't accept the new row"); err.step = step; err.debugInfo = e && e.debugInfo; err.code = e && e.code; throw err; };
+
+      for (let k = 0; k < rowsVals.length; k++) {
+        const idx = at + k;
+        const v = rowsVals[k].slice(0, width).map((x) => String(x == null ? "" : x));
+        while (v.length < width) v.push("");
+        let row = null;
+        // 1. Insert the row with its values.
+        try {
+          row = idx < count ? table.insertRow(idx, v) : table.appendRow(v);
+          await ctx.sync();
+        } catch (e1) {
+          logErr("insert with values", e1);
+          row = null;
+          let now = count;
+          try { now = await rowCountNow(); } catch (e) { /* keep count */ }
+          if (now > count) { count = now; done++; notes.push("check the new row's text"); continue; }   // it went in anyway
+          // 2. Insert a blank row, then type each value into its cell.
+          try {
+            row = idx < count ? table.insertRow(idx) : table.appendRow();
+            await ctx.sync();
+            row.cells.load("cellIndex");
+            await ctx.sync();
+            row.cells.items.forEach((c) => { const t = v[c.cellIndex]; if (t) c.appendRichText(t); });
+            await ctx.sync();
+          } catch (e2) { fail("insert blank row and fill cells", e2); }
+        }
+        count++; done++;
+        // 3. Colours: start plain, driver cell yellow (not confirmed). A colour problem never blocks the trip.
+        try {
+          row.cells.load("cellIndex,shadingColor");
+          await ctx.sync();
+          if (row.cells.items.some((c) => c.cellIndex !== driverCol && isShaded(c.shadingColor))) {
+            row.cells.items.forEach((c) => { if (c.cellIndex !== driverCol && isShaded(c.shadingColor)) c.shadingColor = "#FFFFFF"; });
+          }
+          const cell = row.cells.items.find((c) => c.cellIndex === driverCol);
+          if (cell) cell.shadingColor = yellow;
+          await ctx.sync();
+        } catch (e3) {
+          logErr("colour driver cell", e3);
+          if (!notes.includes("colour the driver cell yellow by hand")) notes.push("colour the driver cell yellow by hand");
+        }
+      }
+      return { first: at, count: done, notes };
     });
   },
 };
@@ -1443,7 +1486,8 @@ async function onAdd() {
     const res = await state.store.addRows(target.id, Array.from({ length: e.buses }, () => values), DB.layout.roles.indexOf("driver"));
     await ingestActive();
     recompute();
-    showToast(`${e.school}${e.id ? ` (${e.id})` : ""} on ${target.title}, ${res.count > 1 ? `rows ${res.first} to ${res.first + res.count - 1}` : `row ${res.first}`}. Driver cell marked yellow, not confirmed.`);
+    const notes = res.notes && res.notes.length ? ` Please ${listJoin(res.notes)}.` : " Driver cell marked yellow, not confirmed.";
+    showToast(`${e.school}${e.id ? ` (${e.id})` : ""} on ${target.title}, ${res.count > 1 ? `rows ${res.first} to ${res.first + res.count - 1}` : `row ${res.first}`}.${notes}`);
     state.confirmSig = null;
     $("addBtn").dataset.mode = "normal";
     state.busy = false;
@@ -1451,7 +1495,9 @@ async function onAdd() {
     statusLine();
   } catch (err) {
     $("alerts").textContent = "";
-    $("alerts").append(alertEl("red", "Couldn't add the trip", `${errText(err)} Check the page, then try again.`, true));
+    logErr("add", err);
+    try { await ingestActive(); recompute(); } catch (x) { /* keep going */ }
+    $("alerts").append(alertEl("red", "Couldn't add the trip", `${errText(err)} Look at the page before trying again, so the trip doesn't go in twice. If it keeps happening, take a screenshot of this message.`, true));
     statusLine();
   } finally {
     setBusy(false);
