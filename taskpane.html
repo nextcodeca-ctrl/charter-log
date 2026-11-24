@@ -397,8 +397,9 @@ function minToHhmm(min) { return min == null ? "" : `${String(Math.floor(min / 6
 
 // Day page titles: "Nov 26 - DAY 5", "Nov 17 – DAY 3 DONE"
 function parseTitle(title, ref) {
-  const t = clean(title);
-  const m = /^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/.exec(t);
+  // Handles "Nov 26 - DAY 5", "NOV 5TH - DAY 1", "Tue Nov 5", "Nov. 5th"
+  const t = clean(title).replace(/^(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)[a-z]*\.?,?\s+/i, "");
+  const m = /^([A-Za-z]{3,9})\.?\s*(\d{1,2})(?:st|nd|rd|th)?(?![0-9])/i.exec(t);
   if (!m) return null;
   const mi = monthIdx(m[1]);
   if (mi < 0) return null;
