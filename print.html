@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trip sheets</title>
+<style>body{margin:0;background:#fff;color:#000;font:14px/1.4 "Segoe UI",Arial,sans-serif}#wait{padding:24px}</style>
+</head>
+<body>
+<p id="wait">Getting trip sheets from Charter Log…</p>
+<script>
+(function () {
+  // Charter Log sends the finished sheets here, then this page prints them. Nothing is stored or sent anywhere else.
+  var done = false;
+  window.addEventListener("message", function (ev) {
+    if (done || ev.source !== window.opener || !ev.data || ev.data.type !== "charterlog-sheets") return;
+    if (ev.origin !== location.origin && ev.origin !== "null") return;
+    done = true;
+    document.title = ev.data.title || "Trip sheets";
+    var st = document.createElement("style"); st.textContent = ev.data.css; document.head.appendChild(st);
+    document.body.innerHTML = '<p class="screen-note">If the print box doesn\'t open, press Ctrl+P. Set it to landscape.</p>' + ev.data.html;
+    var go = function () { setTimeout(function () { window.print(); }, 150); };
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(go); else go();
+  });
+  if (window.opener) window.opener.postMessage({ type: "charterlog-ready" }, location.origin === "null" || location.protocol === "file:" ? "*" : location.origin);
+  else document.getElementById("wait").textContent = "Open trip sheets from the Charter Log panel in OneNote.";
+})();
+</script>
+</body>
+</html>
