@@ -699,7 +699,7 @@ const SHEET_CSS = `@page{size:letter landscape;margin:.35in .3in}*{box-sizing:bo
 function sheetsHtml(sheets) {
   const head = `<thead><tr><th style="width:21%">Date of Trip</th><th class="v"><span># of Hours</span></th><th style="width:10%">Driver</th><th style="width:15%">Pick Up Location</th><th style="width:7%">Pick Up Time</th><th style="width:15%">Destination</th><th style="width:7%">Return Time</th><th>Notes</th><th style="width:5%">Bus#</th><th class="v"><span># of Buses</span></th></tr></thead>`;
   return sheets.map((sh) => {
-    const rows = sh.rows.map((r) => `<tr><td class="d">${esc(r.date)}</td><td></td><td>${esc(r.driver)}</td><td>${esc(r.loc)}</td><td class="c">${esc(r.time)}</td><td>${esc(r.dest)}</td><td class="c">${esc(r.ret)}</td><td>${esc(r.notes)}</td><td></td><td class="c">${esc(r.buses)}</td></tr>`);
+    const rows = sh.rows.map((r) => `<tr><td class="d">${esc(r.date)}</td><td></td><td>${esc(r.driver)}</td><td>${esc(r.loc)}</td><td class="c">${esc(r.time)}</td><td>${esc(r.dest)}</td><td class="c">${esc(r.ret)}</td><td>${esc(r.notes)}</td><td></td><td></td></tr>`);
     while (rows.length < 6) rows.push("<tr>" + "<td></td>".repeat(10) + "</tr>");
     return `<section class="sheet"><h1>Charter Driver Trip Sheet</h1><div class="top"><div class="box prohib"><div class="bh">Prohibited Items</div><p>${esc(SHEET_TEXT.prohibited)}</p></div>` +
       `<div class="right"><table class="phones"><tr><th colspan="2">On Call Phone Numbers</th></tr>${SHEET_TEXT.phones.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>`).join("")}</table>` +
