@@ -229,9 +229,9 @@ select:focus { outline: none; border-color: #000; box-shadow: 0 0 0 3px rgba(245
       <div class="field" data-role="drivernotes"><label for="fDriverNotes">Notes for drivers</label><textarea id="fDriverNotes" rows="2"></textarea></div>
       <div class="field" data-role="fsnotes"><label for="fFsNotes">FS notes</label><input id="fFsNotes" type="text" autocomplete="off"></div>
       <div class="field" data-role="approved">
-        <span class="lbl" id="apprLbl">Request approved? <span class="req">(required)</span></span>
+        <span class="lbl" id="apprLbl">Request approved?</span>
         <div class="seg" role="radiogroup" aria-labelledby="apprLbl">
-          <label class="yes"><input type="radio" name="approved" value="yes"> Approved</label>
+          <label class="yes"><input type="radio" name="approved" value="yes" checked> Approved</label>
           <label class="no"><input type="radio" name="approved" value="no"> Not yet</label>
         </div>
         <p class="note">Not yet puts a blue driver cell. Approved puts yellow.</p>
@@ -1373,7 +1373,7 @@ function clearExtraTimes() { ["pickupMore", "returnMore"].forEach((id) => { cons
 
 // Approved or not: asked on every trip. Not approved = blue driver cell.
 function approvalValue() { const c = document.querySelector('input[name="approved"]:checked'); return c ? c.value === "yes" : null; }
-function clearApproval() { document.querySelectorAll('input[name="approved"]').forEach((i) => { i.checked = false; }); }
+function clearApproval() { document.querySelectorAll('input[name="approved"]').forEach((i) => { i.checked = i.value === "yes"; }); }   // default: Approved
 
 function updateSign() {
   const d = isoToDate($(F.date).value);
