@@ -144,6 +144,22 @@ select:focus { outline: none; border-color: #000; box-shadow: 0 0 0 3px rgba(245
   body.printing #printArea { display: block !important; }
 }
 
+.field .lbl { display: block; margin: 0 0 4px; font-weight: 600; font-size: 13px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1.5px solid var(--edge); border-radius: 6px; overflow: hidden; }
+.seg label { position: relative; display: flex; align-items: center; justify-content: center; min-height: 40px; margin: 0; font-weight: 600; font-size: 14px; cursor: pointer; background: #fff; }
+.seg label + label { border-left: 1.5px solid var(--edge); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label.yes:has(input:checked) { background: var(--yellow); color: #000; }
+.seg label.no:has(input:checked) { background: #00B0F0; color: #000; }
+.seg label:has(input:focus-visible) { outline: 3px solid #000; outline-offset: -3px; }
+.field.invalid .seg { border-color: var(--stop); }
+.more { display: grid; gap: 6px; }
+.more:not(:empty) { margin-top: 6px; }
+.xrow { display: flex; gap: 6px; align-items: center; }
+.xrow input { flex: 1; min-width: 0; }
+.xbtn { appearance: none; flex: none; width: 32px; height: 32px; border: 1.5px solid var(--edge); border-radius: 6px; background: #fff; font: 600 16px/1 var(--text); cursor: pointer; }
+.addtime { margin-top: 5px; font-size: 12.5px; }
+
 </style>
 </head>
 <body>
@@ -202,8 +218,8 @@ select:focus { outline: none; border-color: #000; box-shadow: 0 0 0 3px rgba(245
         <span id="signLive" class="sr" aria-live="polite"></span>
       </div>
       <div class="pair">
-        <div class="field" data-role="pickup"><label for="fPickup">Pickup time</label><input id="fPickup" type="time" step="300"></div>
-        <div class="field" data-role="return"><label for="fReturn">Return time</label><input id="fReturn" type="time" step="300"></div>
+        <div class="field" data-role="pickup"><label for="fPickup">Pickup time</label><input id="fPickup" type="time" step="300"><div id="pickupMore" class="more"></div><button class="linkbtn addtime" type="button" data-for="pickup">Add a 2nd pickup</button></div>
+        <div class="field" data-role="return"><label for="fReturn">Return time</label><input id="fReturn" type="time" step="300"><div id="returnMore" class="more"></div><button class="linkbtn addtime" type="button" data-for="return">Add a 2nd return</button></div>
       </div>
       <div class="field" data-role="destination"><label for="fDest">Destination</label><input id="fDest" type="text" list="dlDest" autocomplete="off"><datalist id="dlDest"></datalist><p id="destNote" class="note" hidden></p></div>
       <div class="pair">
@@ -212,6 +228,14 @@ select:focus { outline: none; border-color: #000; box-shadow: 0 0 0 3px rgba(245
       </div>
       <div class="field" data-role="drivernotes"><label for="fDriverNotes">Notes for drivers</label><textarea id="fDriverNotes" rows="2"></textarea></div>
       <div class="field" data-role="fsnotes"><label for="fFsNotes">FS notes</label><input id="fFsNotes" type="text" autocomplete="off"></div>
+      <div class="field" data-role="approved">
+        <span class="lbl" id="apprLbl">Request approved? <span class="req">(required)</span></span>
+        <div class="seg" role="radiogroup" aria-labelledby="apprLbl">
+          <label class="yes"><input type="radio" name="approved" value="yes"> Approved</label>
+          <label class="no"><input type="radio" name="approved" value="no"> Not yet</label>
+        </div>
+        <p class="note">Not yet puts a blue driver cell. Approved puts yellow.</p>
+      </div>
     </div>
     <div id="alerts" aria-live="polite"></div>
     <div class="actions">
@@ -622,14 +646,20 @@ const UNCONFIRMED = "#FFFF00";
 function hexRgb(c) { const m = /([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})\s*$/i.exec(String(c || "")); return m ? [1, 2, 3].map((k) => parseInt(m[k], 16)) : null; }
 const isYellow = (c) => { const v = hexRgb(c); return !!v && v[0] >= 200 && v[1] >= 190 && v[2] <= 140; };
 // New trips get the driver cell yellow (driver not confirmed yet), in the same yellow the page already uses.
-function unconfirmedColour(shading, driverCol) {
-  if (driverCol < 0 || !shading) return UNCONFIRMED;
+// Blue driver cell = request not approved yet.
+const UNAPPROVED = "#00B0F0";
+const isBlue = (c) => { const v = hexRgb(c); return !!v && v[2] >= 170 && v[0] <= 140 && v[2] - v[0] >= 60; };
+function pageColour(shading, driverCol, test, fallback) {
+  if (driverCol < 0 || !shading) return fallback;
   const counts = new Map();
-  shading.forEach((row) => { const c = row && row[driverCol]; if (isYellow(c)) { const k = "#" + /([0-9a-f]{6})\s*$/i.exec(c)[1].toUpperCase(); counts.set(k, (counts.get(k) || 0) + 1); } });
-  let best = UNCONFIRMED, n = 0;
+  shading.forEach((row) => { const c = row && row[driverCol]; if (test(c)) { const k = "#" + /([0-9a-f]{6})\s*$/i.exec(c)[1].toUpperCase(); counts.set(k, (counts.get(k) || 0) + 1); } });
+  let best = fallback, n = 0;
   counts.forEach((v, k) => { if (v > n) { best = k; n = v; } });
   return best;
 }
+const unconfirmedColour = (shading, driverCol) => pageColour(shading, driverCol, isYellow, UNCONFIRMED);
+const unapprovedColour = (shading, driverCol) => pageColour(shading, driverCol, isBlue, UNAPPROVED);
+const driverCellColour = (shading, driverCol, approved) => (approved === false ? unapprovedColour(shading, driverCol) : unconfirmedColour(shading, driverCol));
 const isShaded = (c) => { const h = /([0-9a-f]{6})\s*$/i.exec(String(c || "")); return !!h && h[1].toUpperCase() !== "FFFFFF"; };
 
 function rowsFromGrid(grid, layout, shading) {
@@ -670,7 +700,7 @@ function tripSheets(rows, date) {
   const live = rows.filter((r) => !r.cancelled && (r.school || r.id));
   const busesById = new Map();
   live.forEach((r) => { if (r.id) busesById.set(r.id, (busesById.get(r.id) || 0) + 1); });
-  const confirmed = live.filter((r) => r.driver && isRed(r.driverColour));
+  const confirmed = live.filter((r) => r.driver && isRed(r.driverColour) );
   const waiting = live.filter((r) => !confirmed.includes(r));
   const byDriver = new Map();
   confirmed.forEach((r) => { const k = norm(r.driver); if (!byDriver.has(k)) byDriver.set(k, []); byDriver.get(k).push(r); });
@@ -682,8 +712,8 @@ function tripSheets(rows, date) {
   return { sheets, waiting: waiting.sort((a, b) => when(a) - when(b)) };
 }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
-const SHEET_CSS = `@page{size:letter landscape;margin:.35in .3in}*{box-sizing:border-box}body{margin:0;background:#fff;color:#000;font:13px/1.3 Aptos,"Segoe UI",Calibri,Arial,sans-serif}
-.sheet{page-break-after:always;break-after:page;padding:6px 4px}.sheet:last-child{page-break-after:auto;break-after:auto}
+const SHEET_CSS = `@page{size:letter landscape;margin:0}*{box-sizing:border-box}body{margin:0;background:#fff;color:#000;font:13px/1.3 Aptos,"Segoe UI",Calibri,Arial,sans-serif}
+.sheet{page-break-after:always;break-after:page;padding:.4in .35in}.sheet:last-child{page-break-after:auto;break-after:auto}
 .sheet h1{margin:6px 0 14px;text-align:center;font:800 30px/1.1 "Aptos ExtraBold",Aptos,"Segoe UI",Arial,sans-serif;letter-spacing:-.01em}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:16px}
 .box{border:1.6px solid #000}.prohib{width:37%;text-align:center}.prohib .bh{font-weight:600;padding:3px;border-bottom:1.6px solid #000}.prohib p{margin:0;padding:6px 10px;font-weight:300}
@@ -847,8 +877,8 @@ function rowValues(e, layout, style) {
   return layout.roles.map((role) => {
     switch (role) {
       case "school": return up(e.school);
-      case "pickup": return fmtTime(e.pickup, style.timeStyle);
-      case "return": return fmtTime(e.ret, style.timeStyle);
+      case "pickup": return (e.pickups || [e.pickup]).filter((t) => t != null).map((t) => fmtTime(t, style.timeStyle)).join("/");
+      case "return": return (e.rets || [e.ret]).filter((t) => t != null).map((t) => fmtTime(t, style.timeStyle)).join("/");
       case "destination": return e.destKnown ? e.dest : up(e.dest);
       case "riders": return e.riders ? String(e.riders) : "";
       case "id": return e.id || "";
@@ -985,7 +1015,7 @@ const OneNoteStore = {
   // Adds rows to the open page. Existing rows are never edited.
   // Adds rows to the open page, one at a time. Existing rows are never edited.
   // OneNote on the web can reject a row inserted with values; then it inserts a blank row and fills it cell by cell.
-  addRows(pageId, rowsVals, driverCol, viaActive) {
+  addRows(pageId, rowsVals, driverCol, viaActive, approved) {
     return OneNote.run(async (ctx) => {
       let r;
       if (viaActive) {
@@ -1000,7 +1030,7 @@ const OneNoteStore = {
       const table = r.table;
       const width = r.grid[0] ? r.grid[0].length : table.columnCount;
       const at = insertAt(r.grid);
-      const yellow = unconfirmedColour(r.shading, driverCol);
+      const yellow = driverCellColour(r.shading, driverCol, approved);
       const notes = [];
       let count = r.grid.length, done = 0;
       const rowCountNow = async () => { table.load("rowCount"); await ctx.sync(); return table.rowCount; };
@@ -1044,7 +1074,8 @@ const OneNoteStore = {
           await ctx.sync();
         } catch (e3) {
           logErr("colour driver cell", e3);
-          if (!notes.includes("colour the driver cell yellow by hand")) notes.push("colour the driver cell yellow by hand");
+          const how = `colour the driver cell ${approved === false ? "blue" : "yellow"} by hand`;
+          if (!notes.includes(how)) notes.push(how);
         }
       }
       return { first: at, count: done, notes };
@@ -1101,11 +1132,11 @@ function DemoStore() {
     async readActive() { await pause(40); const p = byId(active); return { page: { id: p.id, title: p.title }, grid: p.grid.map((r) => r.slice()), shading: p.shade.map((r) => r.slice()) }; },
     async readPage(id) { await pause(40); const p = byId(id); if (!p) throw new Error("That page isn't in Daily Charters anymore"); return { page: { id: p.id, title: p.title }, grid: p.grid.map((r) => r.slice()), shading: p.shade.map((r) => r.slice()) }; },
     async goTo(id) { await pause(120); if (!byId(id)) throw new Error("That page isn't in Daily Charters anymore"); active = id; },
-    async addRows(id, rowsVals, driverCol) {
+    async addRows(id, rowsVals, driverCol, viaActive, approved) {
       await pause(100);
       const p = byId(id);
       const at = insertAt(p.grid);
-      rowsVals.forEach((v, k) => { p.grid.splice(at + k, 0, v.slice(0, H.length)); p.shade.splice(at + k, 0, H.map((_, i) => (i === driverCol ? unconfirmedColour(p.shade, driverCol) : ""))); });
+      rowsVals.forEach((v, k) => { p.grid.splice(at + k, 0, v.slice(0, H.length)); p.shade.splice(at + k, 0, H.map((_, i) => (i === driverCol ? driverCellColour(p.shade, driverCol, approved) : ""))); });
       return { first: at, count: rowsVals.length };
     },
   };
@@ -1306,6 +1337,9 @@ function collectEntry() {
   const e = {
     id: (/\d{4,7}/.exec(val("id")) || [""])[0], school: val("school"), date,
     pickup: hhmmToMin($(F.pickup).value), ret: hhmmToMin($(F.return).value), dest: val("destination"),
+    pickups: [hhmmToMin($(F.pickup).value), ...extraTimes("pickup")].filter((t) => t != null),
+    rets: [hhmmToMin($(F.return).value), ...extraTimes("return")].filter((t) => t != null),
+    approved: approvalValue(),
     buses: busesN > 0 ? busesN : 1, riders: parseInt(val("riders"), 10) || null,
     drivernotes: val("drivernotes"), fsnotes: val("fsnotes"),
   };
@@ -1314,7 +1348,32 @@ function collectEntry() {
   e.destKnown = state.profiles.dests.some((d) => d.value === e.dest);
   return e;
 }
-const entrySig = () => JSON.stringify(Object.keys(F).map((r) => $(F[r]).value));
+const entrySig = () => JSON.stringify([Object.keys(F).map((r) => $(F[r]).value), extraTimes("pickup"), extraTimes("return"), approvalValue()]);
+
+// Trip and a half: extra pickup / return times under the first one.
+function extraTimes(role) { return [...document.querySelectorAll(`.xtime[data-for="${role}"]`)].map((i) => hhmmToMin(i.value)).filter((t) => t != null); }
+function addTimeInput(role) {
+  const box = $(role === "pickup" ? "pickupMore" : "returnMore");
+  const n = box.children.length + 2;
+  const inp = el("input", { type: "time", step: "300", class: "xtime", "data-for": role, "aria-label": `${role === "pickup" ? "Pickup" : "Return"} time ${n}` });
+  const x = el("button", { type: "button", class: "xbtn", "aria-label": "Remove this time" }, "\u00d7");
+  const row = el("div", { class: "xrow" }, inp, x);
+  x.addEventListener("click", () => { row.remove(); resetConfirm(); updateMoreLabels(); scheduleLive(); });
+  box.append(row);
+  updateMoreLabels();
+  inp.focus();
+}
+function updateMoreLabels() {
+  ["pickup", "return"].forEach((r) => {
+    const b = document.querySelector(`.addtime[data-for="${r}"]`);
+    if (b) b.textContent = document.querySelectorAll(`.xtime[data-for="${r}"]`).length ? "Add another" : (r === "pickup" ? "Add a 2nd pickup" : "Add a 2nd return");
+  });
+}
+function clearExtraTimes() { ["pickupMore", "returnMore"].forEach((id) => { const b = $(id); if (b) b.textContent = ""; }); updateMoreLabels(); }
+
+// Approved or not: asked on every trip. Not approved = blue driver cell.
+function approvalValue() { const c = document.querySelector('input[name="approved"]:checked'); return c ? c.value === "yes" : null; }
+function clearApproval() { document.querySelectorAll('input[name="approved"]').forEach((i) => { i.checked = false; }); }
 
 function updateSign() {
   const d = isoToDate($(F.date).value);
@@ -1370,6 +1429,7 @@ function onFieldInput(ev) {
   if (r === "buses") updateAddLabel();
   if (r === "destination" && ev.type === "change") expandDest(true);
   if (r === "school" && ev.type === "change") { const k = matchSchool(val("school"), state.profiles.schools); if (k && k.name !== val("school")) setVal("school", k.name, true); }
+  if (r === "approved") updateAddLabel();
   if (["school", "date", "pickup", "destination", "id", "buses"].includes(r)) scheduleLive();
 }
 
@@ -1546,11 +1606,13 @@ function markInvalid(role, msg) {
   const f = document.querySelector(`.field[data-role="${role}"]`);
   f.classList.add("invalid");
   let m = f.querySelector(".err");
-  if (!m) { m = el("p", { class: "err" }); f.querySelector("input, textarea").after(m); }
+  if (!m) { m = el("p", { class: "err" }); const anchor = f.querySelector(".seg") || f.querySelector("input, textarea"); anchor.after(m); }
   m.textContent = msg;
 }
 function resetForm(focus) {
   Object.keys(F).forEach((r) => setVal(r, r === "buses" ? "1" : ""));
+  clearExtraTimes();
+  clearApproval();
   document.querySelectorAll(".field").forEach((f) => f.classList.remove("invalid", "missing"));
   document.querySelectorAll(".field .err").forEach((m) => m.remove());
   $("destNote").hidden = true;
@@ -1586,7 +1648,8 @@ async function onAdd() {
   let bad = false;
   if (!e.school) { markInvalid("school", "Pick or type the school."); bad = true; }
   if (!e.date) { markInvalid("date", "Pick the trip date."); bad = true; }
-  if (bad) { const f = document.querySelector(".field.invalid input"); if (f) f.focus(); return; }
+  if (e.approved == null) { markInvalid("approved", "Pick Approved or Not yet."); bad = true; }
+  if (bad) { const f = document.querySelector(".field.invalid input"); if (f) f.focus(); if (f && f.type === "radio") f.closest(".field").scrollIntoView({ block: "center" }); return; }
   const target = dayFor(e.date);
   if (!target) {
     renderIssues([], e, false);
@@ -1611,10 +1674,10 @@ async function onAdd() {
     $("addBtn").textContent = "Adding…";
     const pageRows = state.rows.filter((r) => r.pageId === target.id);
     const values = rowValues(e, DB.layout, writeStyle(pageRows.length ? pageRows : state.rows));
-    const res = await state.store.addRows(target.id, Array.from({ length: e.buses }, () => values), DB.layout.roles.indexOf("driver"), state.direct === false);
+    const res = await state.store.addRows(target.id, Array.from({ length: e.buses }, () => values), DB.layout.roles.indexOf("driver"), state.direct === false, e.approved);
     try { await readDay(target); } catch (x) { /* rows are in; memory catches up next read */ }
     recompute();
-    const notes = res.notes && res.notes.length ? ` Please ${listJoin(res.notes)}.` : " Driver cell marked yellow, not confirmed.";
+    const notes = res.notes && res.notes.length ? ` Please ${listJoin(res.notes)}.` : (e.approved === false ? " Driver cell marked blue, not approved yet." : " Driver cell marked yellow, not confirmed.");
     showToast(`${e.school}${e.id ? ` (${e.id})` : ""} on ${target.title}, ${res.count > 1 ? `rows ${res.first} to ${res.first + res.count - 1}` : `row ${res.first}`}.${notes}`, target);
     state.confirmSig = null;
     $("addBtn").dataset.mode = "normal";
@@ -1767,13 +1830,18 @@ async function onPrintSheets() {
       out.append(el("p", { class: "summary" }, `No confirmed drivers on ${day.title} yet.`));
     }
     if (waiting.length) {
-      const box = alertEl("yellow", `Not printed: ${plural(waiting.length, "trip")} not confirmed`, "Driver cell isn't red yet. Confirm, turn the cell red, then print again.");
+      const box = alertEl("yellow", `Not printed: ${plural(waiting.length, "trip")} not confirmed`, "Only red driver cells print. Blue means not approved yet, yellow means the driver hasn't confirmed.");
       const list = el("div", {});
       waiting.forEach((r) => {
-        const line = el("p", { style: "margin:8px 0 2px" }, `${r.school}${r.pickupRaw ? ` ${r.pickupRaw}` : ""}${r.dest ? ` to ${r.dest}` : ""}. ${r.driver ? `${r.driver}, waiting to confirm.` : "No driver yet."}`);
-        const cb = el("button", { class: "go-page", type: "button" }, "Copy driver text");
-        cb.addEventListener("click", () => copyText(driverText(r, date), cb));
-        list.append(line, cb);
+        const unapproved = isBlue(r.driverColour);
+        const status = unapproved ? "Not approved yet." : r.driver ? `${r.driver}, waiting to confirm.` : "No driver yet.";
+        const line = el("p", { style: "margin:8px 0 2px" }, `${r.school}${r.pickupRaw ? ` ${r.pickupRaw}` : ""}${r.dest ? ` to ${r.dest}` : ""}. ${status}`);
+        list.append(line);
+        if (!unapproved) {
+          const cb = el("button", { class: "go-page", type: "button" }, "Copy driver text");
+          cb.addEventListener("click", () => copyText(driverText(r, date), cb));
+          list.append(cb);
+        }
       });
       box.querySelector("div").append(list);
       out.append(box);
@@ -1802,6 +1870,7 @@ function wire() {
   $("addBtn").addEventListener("click", onAdd);
   $("checkBtn").addEventListener("click", onCheck);
   $("printBtn").addEventListener("click", onPrintSheets);
+  document.querySelectorAll(".addtime").forEach((b) => b.addEventListener("click", () => addTimeInput(b.dataset.for)));
   $("learnBtn").addEventListener("click", () => { if (!$("learnBtn").onclick) onLearn(); });
   $("editColsBtn").addEventListener("click", onEditCols);
   $("saveColsBtn").addEventListener("click", onSaveCols);
@@ -1842,7 +1911,7 @@ function boot() {
   }
 }
 
-window.CharterLog = { tripSheets, sheetsHtml, driverText, isRed, parseRequest, linesFromItems, extractDest, parseTitle, parseDate, parseTime, fmtTime, schoolKey, matchSchool, matchDest,
+window.CharterLog = { isBlue, driverCellColour, rowValues: (e, l, st) => rowValues(e, l, st), tripSheets, sheetsHtml, driverText, isRed, parseRequest, linesFromItems, extractDest, parseTitle, parseDate, parseTime, fmtTime, schoolKey, matchSchool, matchDest,
   destSimilar, guessLayout, rowsFromGrid, writeStyle, findIssues, scanDays, rowValues, insertAt, isGray, state, DB };
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
